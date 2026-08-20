@@ -1,9 +1,8 @@
 # Aegis — Adaptive Application-Fraud Decisioning for Digital Lending
 
-Real-time fraud detection for digital lending origination, built for the Synchrony
-technology hackathon (Problem Statement 1).
+Real-time fraud decisioning for digital lending origination.
 
-Aegis scores a loan application in **under 100ms**, explains every decision in reason
+Aegis scores a loan application in **roughly 120ms**, explains every decision in reason
 codes an analyst can act on and a regulator can audit, and derives its approve/review/block
 boundaries from business economics rather than a tuned constant.
 
@@ -28,8 +27,9 @@ automatically — **with no retraining**.
 
 The mechanism is simple to state: instead of a single cut-off that auto-declines anything
 suspicious, borderline applications route to an analyst who can clear good customers.
-Reducing false positives is the brief's explicit ask, and this is it — measured against a
-system that actually detects fraud, not against a strawman.
+The comparison is deliberately made at **equal recall** — against a binary policy tuned to
+stop exactly as many frauds — rather than against an untuned 0.5 cut-off that misses 97% of
+fraud and would flatter these numbers considerably.
 
 ### Everything else, measured
 
@@ -41,12 +41,19 @@ system that actually detects fraud, not against a strawman.
 | **Calibration error (ECE)** | **0.135 → 0.0028** | **97.9% reduction** after isotonic calibration |
 | Brier score | 0.0724 → 0.0126 | |
 | Behavioural signal share | **41.3%** | of total model gain |
-| Decision latency | p50 74ms / **p95 88ms** | server-side, 100 requests, 400-case index |
-| Tests | **69 passing** | plus 24 end-to-end smoke checks |
+| Decision latency | p50 46ms / **p95 86ms** | server-side, 100 requests, 402-case index, persistence enabled |
+| Tests | **86 passing** | plus 24 end-to-end smoke checks |
 
 **Accuracy is deliberately absent from this table.** At 1.1% fraud prevalence a model that
-predicts "never fraud" scores 98.9%. Any submission leading with accuracy on this dataset is
+predicts "never fraud" scores 98.9%. Any system leading with accuracy on this dataset is
 reporting the base rate.
+
+> **On the latency figure.** Measured on a developer laptop with the model, the calibrator,
+> SHAP and the policy in one Python process, requests paced as the console issues them. It is
+> sensitive to what else the machine is running: the same benchmark returned p50 118ms while
+> unrelated build watchers were consuming half the CPU. The dominant costs are feature
+> preparation and SHAP attribution, not the booster. Recording the audit trail adds
+> **0.115ms** to the request thread, because the write is queued rather than awaited.
 
 ---
 
@@ -122,7 +129,7 @@ prices that backlog, which is a stated limitation below.
 │  Live decision ledger        │         │  Decision engine                     │
 │  Case detail + force bars    │         │   ├─ LightGBM         known fraud    │
 │  Risk-appetite control       │         │   ├─ Isotonic calib.  honest P(fraud)│
-│  Model health / drift        │         │   └─ pgvector k-NN    similar cases  │
+│  Model health / drift        │         │   └─ leaf-overlap     similar cases  │
 └──────────────────────────────┘         │                                      │
                                          │  Policy layer                        │
                                          │   cost-derived thresholds →          │
@@ -133,14 +140,58 @@ prices that backlog, which is a stated limitation below.
                                          │   SHAP → reason codes → Gemini prose │
                                          │                                      │
                                          │  Drift monitor                       │
-                                         └───────────────┬──────────────────────┘
-                                                         │
-                                         ┌───────────────▼──────────────────────┐
-                                         │  Postgres + pgvector                 │
-                                         │  applications · decisions            │
-                                         │  fraud_vectors · audit_log           │
+                                         └──────┬─────────────────────┬─────────┘
+                                    reads at    │                     │  queued,
+                                    startup     │                     │  never awaited
+                                         ┌──────▼─────────────────────▼─────────┐
+                                         │  Postgres 17 + pgvector 0.8          │
+                                         │                                      │
+                                         │  fraud_vectors     HNSW / cosine     │
+                                         │  applications      decisions         │
+                                         │  analyst_verdicts  audit_log         │
+                                         │                    └ append-only,    │
+                                         │                      enforced by     │
+                                         │                      trigger         │
                                          └──────────────────────────────────────┘
 ```
+
+### Persistence, and what is deliberately not on the decision path
+
+Two writes leave this service, and neither is allowed to slow a decision down.
+
+**The audit trail is queued.** A managed Postgres is ~250ms away over the public internet —
+roughly two decisions' worth of latency for a single round trip. Recording a decision inside
+the request would therefore make the reported latency describe the network rather than the
+system, and would take decisioning down whenever the recorder was unavailable. So writes are
+enqueued and drained by a background worker that batches them; the request thread pays
+**0.115ms**, measured. The cost of that choice is stated under Limitations.
+
+**The similarity index is cache-aside.** Postgres is the system of record: every confirmed
+fraud is written there *first*, and only then to the process-local mirror that serves
+lookups. If the durable write fails, nothing is indexed anywhere and the analyst is told —
+rather than being shown a confirmation that would vanish on restart. At startup the mirror
+is rebuilt from Postgres, storing raw leaf assignments alongside the projected embedding so
+the restored index is **exact rather than approximate**.
+
+Verified against a live database, not asserted:
+
+```
+before restart   fraud_vectors 401   index 401   decisions 562   audit_log 564
+                 (400 seeded from history + 1 confirmed by an analyst)
+   process killed and restarted
+after  restart   fraud_vectors 401   index 401   decisions 562   audit_log 564
+                 index rebuilt from Postgres — the analyst's case survived
+```
+
+`UPDATE` and `DELETE` on `audit_log` are rejected by the database itself, so no code path —
+including a bug in this service — can rewrite a recorded decision:
+
+```
+UPDATE: blocked by database (audit_log is append-only; UPDATE is not permitted)
+DELETE: blocked by database (audit_log is append-only; DELETE is not permitted)
+```
+
+Reproduce both with `python scripts/verify_persistence.py`.
 
 ### The LLM boundary
 
@@ -379,7 +430,7 @@ on screen. The ledger shows **misses**, not just catches.
 
 ## Limitations
 
-Stated openly rather than left for a reviewer to find.
+Stated here rather than left to be discovered.
 
 - **The cost model does not price capacity overflow.** It charges ₹200 per review whether or
   not an analyst exists to do it. This is precisely why the fixed cutoff appears to beat the
@@ -392,39 +443,40 @@ Stated openly rather than left for a reviewer to find.
 - **Isotonic calibration produces heavily tied probabilities**, so quantile- and
   capacity-based thresholds are coarse — neither mechanism hits exactly 5%. Exact capacity
   targeting would need tie-breaking on the raw score.
-- **The prototype runs locally.** Cloud architecture is designed and documented but only
-  partially exercised.
+- **There is no cloud deployment.** The service runs locally against a managed Postgres.
+  Containerisation, IAM and a hosted runtime are designed but not built.
 - **The analyst catch rate (90%) is an assumption**, not a measurement. It is configuration,
   so it can be replaced with an observed figure.
+- **The audit write is asynchronous.** A process killed between the enqueue and the flush
+  loses at most one half-second batch. That is the right trade against a database on the far
+  side of the public internet and the wrong one against a co-located database, where the
+  write belongs inside the request's transaction. See `app/db/repository.py`.
 
 ---
 
-## Problem statement mapping
+## Capability map
 
-| The brief asks for | Where it is |
+Where each capability lives, for anyone reading the source for the first time.
+
+| Capability | Where it is |
 | --- | --- |
-| Real-time detection | Synchronous scoring, p95 163ms, no batch path exists |
+| Real-time scoring | Synchronous, p95 86ms, no batch path exists |
 | Machine learning **and behavioural analytics** | Velocity, device, session features — 41.3% of model gain |
-| Reducing false positives | 88% fewer at equal recall, via the cost-derived review band |
-| Adapting to new fraud vectors | Similarity index (instant, no retrain) + a measured drift study |
-| React frontend | React 19 + Vite + Tailwind v4 |
-| Spring Boot *or equivalent* | FastAPI — chosen for native ML integration |
-| PostgreSQL + pgvector | `app/services/similarity.py` — see the note below |
+| False-positive reduction | 88% fewer at equal recall, via the cost-derived review band |
+| Adaptation to new fraud patterns | Similarity index (instant, no retrain) + a measured drift study |
+| Frontend | React 19 + Vite + Tailwind v4 |
+| API service | FastAPI — chosen so the model runs in-process, with no cross-process hop on the decision path |
+| PostgreSQL | `applications`, `decisions`, `analyst_verdicts`, `audit_log` |
+| pgvector | `fraud_vectors`, HNSW + cosine — `app/services/similarity.py` |
 | LLM service | Gemini, strictly downstream of decisioning |
 | Security, no hardcoded secrets | See the security table |
-| Unit testing | 69 tests |
+| Unit testing | 86 tests, plus 24 end-to-end smoke checks |
 | Explainability & responsible AI | SHAP reason codes, adverse-action ordering, fairness analysis |
-
-> **pgvector honesty note:** the similarity layer has two interchangeable backends. The
-> in-memory index is what the running prototype uses. The `PgVectorSimilarityIndex`
-> implementation is complete — schema, HNSW index, cosine search, Johnson-Lindenstrauss
-> projection of leaf assignments — but has **not been executed against a live Postgres**. It
-> is code, not a demonstrated result, and is described as such.
 
 ---
 
 ## Licence & attribution
 
-Built for the Synchrony technology hackathon, August 2026.
 Dataset: [Bank Account Fraud Suite (NeurIPS 2022)](https://www.kaggle.com/datasets/sgpjesus/bank-account-fraud-dataset-neurips-2022),
-Feedzai, CC BY-NC-ND 4.0.
+Feedzai, CC BY-NC-ND 4.0. The dataset is not redistributed in this repository; see
+`scripts/download_data.py`.
