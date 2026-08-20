@@ -82,12 +82,19 @@ class ScoringService:
         settings: Settings,
         *,
         bundle_name: str = "model_bundle.joblib",
+        similarity_index: SimilarityIndex | None = None,
     ) -> "ScoringService":
         """Load the trained bundle and assemble the service.
 
         Raises if the artifact is missing rather than starting in a degraded
         state: an API that accepts scoring requests without a model would
         return errors per request instead of failing once, visibly, at boot.
+
+        Args:
+            similarity_index: storage for confirmed-fraud lookalikes. Defaults
+                to the in-memory index, which is correct for tests and for a
+                run with no database configured. Startup injects the durable,
+                Postgres-backed index when ``DATABASE_URL`` is set.
         """
         bundle_path = Path(settings.artifact_dir) / bundle_name
         if not bundle_path.exists():
@@ -117,7 +124,12 @@ class ScoringService:
             feature_spec=bundle["feature_spec"],
             policy=bundle["policy"],
             explainer=ShapExplainer(booster, bundle["feature_spec"].feature_names),
-            similarity_index=InMemorySimilarityIndex(),
+            # `is None`, not `or`: an index defines __len__, so an empty one is
+            # falsy and `or` would discard an injected empty index in favour of
+            # a fresh one - leaving writes going somewhere nothing searches.
+            similarity_index=(
+                InMemorySimilarityIndex() if similarity_index is None else similarity_index
+            ),
             narrator=narrator,
             model_version=f"lgbm-{booster.best_iteration}-iter",
             similarity_min_score=settings.similarity_min_score,
@@ -323,6 +335,12 @@ class ScoringService:
         the evaluation months would leak the answers into the very population
         the reported metrics are measured on.
 
+        Skipped entirely when the index is already populated - which is the case
+        after a restart with persistence configured, where the index was
+        restored from Postgres. Re-seeding then would be worse than redundant:
+        it would bury an analyst's confirmed cases under the historical sample
+        every time the process restarted.
+
         Returns the number of cases indexed. Failure is logged and swallowed:
         an unavailable dataset should degrade the feature, not stop the API.
         """
@@ -331,6 +349,13 @@ class ScoringService:
         limit = self.similarity_seed_size if limit is None else limit
         if limit <= 0:
             return 0
+
+        if len(self.similarity_index) > 0:
+            logger.info(
+                "similarity index already holds %d cases (restored from storage); "
+                "skipping historical seed", len(self.similarity_index),
+            )
+            return len(self.similarity_index)
 
         try:
             data_dir = Path(os.getenv("DATA_DIR", "C:/dev/data/baf"))
@@ -359,17 +384,27 @@ class ScoringService:
             # One batched forward pass for every case, rather than per-row.
             all_leaves = leaf_assignment(self.booster, features)
 
+            records = []
             for position, (_, row) in enumerate(sample.iterrows()):
                 metadata = {
                     key: value for key, value in row.to_dict().items()
                     if key not in (TARGET, TIME_COLUMN)
                 }
-                self.similarity_index.add(
-                    f"CONFIRMED-{position:04d}",
-                    all_leaves[position],
-                    confirmed_fraud=True,
-                    metadata=metadata,
+                records.append(
+                    (f"CONFIRMED-{position:04d}", all_leaves[position], True, metadata)
                 )
+
+            # One round trip for the whole seed when the index is durable.
+            # Several hundred individual INSERTs against a cloud database turn a
+            # one-second startup into a two-minute one.
+            batch_add = getattr(self.similarity_index, "add_many", None)
+            if callable(batch_add):
+                batch_add(records)
+            else:
+                for case_id, leaves, confirmed, metadata in records:
+                    self.similarity_index.add(
+                        case_id, leaves, confirmed_fraud=confirmed, metadata=metadata
+                    )
 
             logger.info(
                 "similarity index seeded with %d confirmed frauds from months 0-5",
@@ -388,15 +423,24 @@ class ScoringService:
 
         This is the fast adaptation path. It takes effect on the very next
         request - no retraining, no redeploy, no model risk sign-off.
+
+        Returns whether the case was indexed. A durable index writes to Postgres
+        first, so a storage failure is reported honestly rather than leaving the
+        analyst believing their confirmation was recorded when it was not.
         """
         features = self._to_features(application)
         leaves = leaf_assignment(self.booster, features)[0]
-        self.similarity_index.add(
-            case_id,
-            leaves,
-            confirmed_fraud=True,
-            metadata=application.model_dump(),
-        )
+        try:
+            self.similarity_index.add(
+                case_id,
+                leaves,
+                confirmed_fraud=True,
+                metadata=application.model_dump(),
+            )
+        except Exception:               # noqa: BLE001
+            logger.exception("failed to index confirmed fraud %s", case_id)
+            return False
+
         logger.info("indexed confirmed fraud %s (index size=%d)",
                     case_id, len(self.similarity_index))
         return True

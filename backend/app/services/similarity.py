@@ -230,21 +230,81 @@ class PgVectorSimilarityIndex:
     ) -> None:
         import json
 
-        embedding = self.embed(leaf_assignment)
+        leaves = np.asarray(leaf_assignment, dtype=np.int32).ravel()
+        embedding = self.embed(leaves)
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"""
-                INSERT INTO {self._table} (case_id, embedding, confirmed_fraud, metadata)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO {self._table}
+                       (case_id, embedding, leaves, confirmed_fraud, metadata)
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (case_id) DO UPDATE
                     SET embedding = EXCLUDED.embedding,
+                        leaves = EXCLUDED.leaves,
                         confirmed_fraud = EXCLUDED.confirmed_fraud,
                         metadata = EXCLUDED.metadata;
                 """,
-                (case_id, embedding.tolist(), confirmed_fraud,
-                 json.dumps(metadata or {})),
+                (case_id, str(embedding.tolist()), [int(v) for v in leaves],
+                 confirmed_fraud, json.dumps(metadata or {}, default=str)),
             )
             connection.commit()
+
+    def add_many(self, records: list[tuple[str, np.ndarray, bool, dict]]) -> int:
+        """Insert many cases in one round trip.
+
+        Seeding writes several hundred cases at startup. One statement per case
+        against a database reached over the internet would take minutes; batched
+        it takes a second.
+        """
+        import json
+
+        if not records:
+            return 0
+
+        rows = []
+        for case_id, leaves_array, confirmed, metadata in records:
+            leaves = np.asarray(leaves_array, dtype=np.int32).ravel()
+            rows.append((
+                case_id,
+                str(self.embed(leaves).tolist()),
+                [int(v) for v in leaves],
+                confirmed,
+                json.dumps(metadata or {}, default=str),
+            ))
+
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.executemany(
+                f"""
+                INSERT INTO {self._table}
+                       (case_id, embedding, leaves, confirmed_fraud, metadata)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (case_id) DO NOTHING;
+                """,
+                rows,
+            )
+            connection.commit()
+        return len(rows)
+
+    def load_all(self) -> list[tuple[str, np.ndarray, bool, dict]]:
+        """Every stored case, for rebuilding a process-local index at startup.
+
+        This is what makes a confirmed fraud outlive the process that recorded
+        it. Without it the index is repopulated from the training data on every
+        boot and an analyst's work is silently discarded.
+        """
+        with self._connect() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                SELECT case_id, leaves, confirmed_fraud, metadata
+                FROM {self._table}
+                WHERE array_length(leaves, 1) IS NOT NULL
+                ORDER BY indexed_at;
+                """
+            )
+            return [
+                (row[0], np.asarray(row[1], dtype=np.int32), bool(row[2]), row[3] or {})
+                for row in cursor.fetchall()
+            ]
 
     def search(self, leaf_assignment: np.ndarray, k: int = 5) -> list[SimilarCase]:
         embedding = self.embed(leaf_assignment)
@@ -275,6 +335,86 @@ class PgVectorSimilarityIndex:
         with self._connect() as connection, connection.cursor() as cursor:
             cursor.execute(f"SELECT count(*) FROM {self._table};")
             return int(cursor.fetchone()[0])
+
+
+class DurableSimilarityIndex:
+    """Postgres is the record; a process-local mirror serves the hot path.
+
+    Why not query pgvector on every scoring request? Because the database is
+    250ms away over the public internet and a decision is budgeted at 80ms.
+    Putting the vector search inside the request would make the round trip to
+    the index three times more expensive than everything else the system does
+    combined, and would tie the availability of a real-time decision to the
+    availability of a remote store.
+
+    So this is cache-aside. Every write goes to Postgres first - if that fails,
+    nothing is added anywhere, because an index entry that exists only in memory
+    is a lie about durability. Reads on the scoring path come from the mirror,
+    which is rebuilt from Postgres at startup and is therefore exact rather than
+    approximate: it compares raw leaf assignments, not projected vectors.
+
+    ``search_vector`` runs the genuine pgvector k-NN. It is used to verify that
+    the stored embeddings and the HNSW index agree with the exact metric, and it
+    is what a horizontally-scaled deployment would call directly once the index
+    outgrew a single process's memory.
+    """
+
+    def __init__(
+        self, store: "PgVectorSimilarityIndex", mirror: InMemorySimilarityIndex | None = None
+    ) -> None:
+        self._store = store
+        # `mirror is None`, never `mirror or ...`: an index defines __len__, so
+        # an empty one is falsy and `or` would silently discard the caller's
+        # object and substitute a different one. Writes would then land in an
+        # index nobody searches.
+        self._mirror = InMemorySimilarityIndex() if mirror is None else mirror
+
+    def restore(self) -> int:
+        """Rebuild the mirror from Postgres. Returns the number of cases loaded."""
+        records = self._store.load_all()
+        for case_id, leaves, confirmed, metadata in records:
+            self._mirror.add(
+                case_id, leaves, confirmed_fraud=confirmed, metadata=metadata
+            )
+        logger.info("similarity mirror restored: %d cases from Postgres", len(records))
+        return len(records)
+
+    def add(
+        self,
+        case_id: str,
+        leaf_assignment: np.ndarray,
+        *,
+        confirmed_fraud: bool,
+        metadata: dict[str, object] | None = None,
+    ) -> None:
+        # Durable first. If this raises, the caller sees the failure and the
+        # mirror is untouched, so the two never disagree.
+        self._store.add(
+            case_id, leaf_assignment,
+            confirmed_fraud=confirmed_fraud, metadata=metadata,
+        )
+        self._mirror.add(
+            case_id, leaf_assignment,
+            confirmed_fraud=confirmed_fraud, metadata=metadata,
+        )
+
+    def add_many(self, records: list[tuple[str, np.ndarray, bool, dict]]) -> int:
+        written = self._store.add_many(records)
+        for case_id, leaves, confirmed, metadata in records:
+            self._mirror.add(
+                case_id, leaves, confirmed_fraud=confirmed, metadata=metadata
+            )
+        return written
+
+    def search(self, leaf_assignment: np.ndarray, k: int = 5) -> list[SimilarCase]:
+        return self._mirror.search(leaf_assignment, k=k)
+
+    def search_vector(self, leaf_assignment: np.ndarray, k: int = 5) -> list[SimilarCase]:
+        """k-NN executed by Postgres, through the HNSW index."""
+        return self._store.search(leaf_assignment, k=k)
+
+    def __len__(self) -> int:
+        return len(self._mirror)
 
 
 def leaf_assignment(booster, features) -> np.ndarray:
