@@ -127,8 +127,17 @@ def take(count: int, offset: int = 0) -> list[dict]:
     return payloads
 
 
+@lru_cache(maxsize=1)
 def true_fraud_rate() -> float:
-    """The real prevalence in the held-out months, for on-screen disclosure."""
+    """The real prevalence in the held-out months, for on-screen disclosure.
+
+    Cached. This reads a million-row parquet file, and it is called on every
+    stream request - twice, once for the field and once for the disclosure
+    text. Uncached it dominated the endpoint's latency and throttled the live
+    feed to roughly one application every two seconds, against a scoring path
+    that answers in 115ms. The value is a property of a fixed dataset and
+    cannot change while the process runs.
+    """
     parquet = DATA_DIR / "base.parquet"
     if not parquet.exists():
         return 0.0

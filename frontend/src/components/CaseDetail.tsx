@@ -57,8 +57,16 @@ export function CaseDetail({
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="num text-[11px] text-ink-3">{result.application_id}</div>
-            <div className="mt-1.5">
+            <div className="mt-1.5 flex items-center gap-2">
               <DecisionPill decision={result.decision} />
+              {result.escalated && (
+                <span
+                  className="num text-[9px] uppercase tracking-wider"
+                  style={{ color: 'var(--color-review)' }}
+                >
+                  escalated from {result.model_decision}
+                </span>
+              )}
             </div>
           </div>
           <div className="text-right">
@@ -78,6 +86,23 @@ export function CaseDetail({
             thresholds={result.thresholds}
           />
         </div>
+
+        {result.escalated && result.escalation_reason && (
+          <div
+            className="mt-3 border-l-2 py-1 pl-2.5 text-[11px] leading-relaxed"
+            style={{ borderColor: 'var(--color-review)', color: 'var(--color-ink-2)' }}
+          >
+            <span className="eyebrow" style={{ color: 'var(--color-review)' }}>
+              Rule override
+            </span>
+            <p className="mt-1">{result.escalation_reason}</p>
+            <p className="mt-1 text-[10px] text-ink-3">
+              The model is unchanged. A previously confirmed fraud was indexed by an
+              analyst, and this application matches it — so the platform raised the
+              decision without retraining.
+            </p>
+          </div>
+        )}
 
         {actualFraud !== null && (
           <div
@@ -160,27 +185,53 @@ export function CaseDetail({
         </div>
         {result.similar_confirmed_cases.length === 0 ? (
           <p className="mt-2 text-[11px] leading-relaxed text-ink-3">
-            No close match in the confirmed-fraud index. Confirming a fraud below indexes
-            it immediately — later lookalikes are flagged without retraining.
+            The confirmed-fraud index is empty. Confirming a fraud below indexes it
+            immediately — later lookalikes are flagged without retraining.
           </p>
         ) : (
-          <ul className="mt-2 space-y-1.5">
-            {result.similar_confirmed_cases.map((match) => (
-              <li
-                key={match.case_id}
-                className="flex items-baseline justify-between gap-2 border-l-2 pl-2 text-[11px]"
-                style={{ borderColor: 'var(--color-block)' }}
-              >
-                <span className="num text-ink-2">{match.case_id}</span>
-                <span className="flex-1 text-[10px] text-ink-3">
-                  {match.matched_on.length > 0
-                    ? `shares ${match.matched_on.join(', ')}`
-                    : 'shared decision paths'}
-                </span>
-                <span className="num text-ink">{formatPercent(match.similarity, 0)}</span>
-              </li>
-            ))}
-          </ul>
+          <>
+            <ul className="mt-2 space-y-1.5">
+              {result.similar_confirmed_cases.map((match) => {
+                // Strength drives the colour, similarity alone does not.
+                // Rendering a 0.42 match in alert red would train analysts to
+                // ignore the panel, which is worse than not having it.
+                const tone =
+                  match.strength === 'strong'
+                    ? 'var(--color-block)'
+                    : match.strength === 'moderate'
+                      ? 'var(--color-review)'
+                      : 'var(--color-line-bright)';
+                return (
+                  <li
+                    key={match.case_id}
+                    className="flex items-baseline justify-between gap-2 border-l-2 pl-2 text-[11px]"
+                    style={{ borderColor: tone }}
+                  >
+                    <span className="num text-ink-2">{match.case_id}</span>
+                    <span className="flex-1 text-[10px] text-ink-3">
+                      {match.matched_on.length > 0
+                        ? `shares ${match.matched_on.join(', ')}`
+                        : 'shared decision paths'}
+                    </span>
+                    <span
+                      className="num text-[9px] uppercase tracking-wider"
+                      style={{ color: tone }}
+                    >
+                      {match.strength}
+                    </span>
+                    <span className="num w-9 text-right text-ink">
+                      {formatPercent(match.similarity, 0)}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+            <p className="mt-2 text-[10px] leading-relaxed text-ink-3">
+              {result.similar_confirmed_cases.some((m) => m.strength === 'strong')
+                ? 'A strong match fires on 1.3% of genuine applications and 10.2% of fraud — a 7.9× lift. Worth investigating.'
+                : 'Nearest cases on file, shown for context. Nothing here resembles this application strongly enough to act on.'}
+            </p>
+          </>
         )}
       </div>
 

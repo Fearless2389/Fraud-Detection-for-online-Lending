@@ -55,6 +55,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.model_bundle.policy.tau_review,
             app.state.model_bundle.policy.tau_block,
         )
+        # A fraud team does not start with an empty case history. Seeding the
+        # similarity index with previously confirmed fraud is what makes
+        # lookalike detection useful from the first request rather than only
+        # after an analyst has manually confirmed something.
+        seeded = app.state.model_bundle.seed_similarity_index()
+        logger.info("similarity index: %d confirmed cases", seeded)
     except FileNotFoundError as error:
         # Start anyway so /health and /docs stay reachable; scoring routes
         # return 503 with an actionable message. A service that refuses to boot

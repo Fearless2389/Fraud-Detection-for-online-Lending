@@ -262,16 +262,17 @@ async def stream_applications(
             detail="Demo data unavailable. Run scripts/download_data.py and "
                    "ml/eda.py to build the parquet cache.",
         )
+    true_rate = demo_stream.true_fraud_rate()
     return {
         "applications": batch,
         "offset": offset,
         "sampled_fraud_share": demo_stream.FRAUD_SHARE,
-        "true_fraud_rate": demo_stream.true_fraud_rate(),
+        "true_fraud_rate": true_rate,
         "disclosure": (
             f"Demonstration ordering: genuine held-out applications, with fraud "
             f"over-sampled to {demo_stream.FRAUD_SHARE:.0%} and spaced every "
             f"{demo_stream.FRAUD_EVERY} positions so a short demo reliably shows "
             f"both outcomes. The true prevalence in these months is "
-            f"{demo_stream.true_fraud_rate():.2%} and is reported alongside."
+            f"{true_rate:.2%} and is reported alongside."
         ),
     }

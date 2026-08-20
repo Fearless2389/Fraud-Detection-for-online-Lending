@@ -16,7 +16,6 @@ import { Activity, Pause, Play, ShieldAlert } from 'lucide-react';
 import {
   api,
   ApiError,
-  type DecisionResult,
   type DriftAnalysis,
   type ModelMetrics,
   type PolicyState,

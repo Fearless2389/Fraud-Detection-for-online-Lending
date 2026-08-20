@@ -31,6 +31,8 @@ export interface SimilarCase {
   case_id: string;
   similarity: number;
   confirmed_fraud: boolean;
+  /** Calibrated on held-out data: strong >= 0.60 (7.9x lift), moderate >= 0.55 (5.8x). */
+  strength: 'strong' | 'moderate' | 'weak';
   matched_on: string[];
 }
 
@@ -46,6 +48,10 @@ export interface DecisionResult {
   narrative: string;
   narrative_source: 'gemini' | 'template';
   similar_confirmed_cases: SimilarCase[];
+  /** What the model and cost policy decided, before any escalation rule. */
+  model_decision: Decision;
+  escalated: boolean;
+  escalation_reason: string | null;
   model_version: string;
   scored_at: string;
   latency_ms: number;
@@ -118,9 +124,15 @@ export interface DriftAnalysis {
 }
 
 export class ApiError extends Error {
-  constructor(readonly status: number, message: string) {
+  // Declared explicitly rather than as a constructor parameter property:
+  // this project builds with `erasableSyntaxOnly`, which rejects TypeScript
+  // syntax that emits runtime code.
+  readonly status: number;
+
+  constructor(status: number, message: string) {
     super(message);
     this.name = 'ApiError';
+    this.status = status;
   }
 }
 

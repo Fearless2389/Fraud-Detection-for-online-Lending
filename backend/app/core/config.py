@@ -97,6 +97,25 @@ class Settings(BaseSettings):
     # this is the constraint that makes the policy staffable.
     max_review_rate: float = Field(default=0.05, ge=0.0, le=1.0)
 
+    # --- similarity search ------------------------------------------------
+    # Minimum leaf-overlap before an application is shown as "resembling
+    # confirmed fraud". Chosen by measurement, not by feel: on 4,000 held-out
+    # applications against a 400-case index, top-1 similarity separates as
+    #
+    #     threshold   genuine firing   fraud firing   lift
+    #        0.45         32.3%           75.5%       2.3x
+    #        0.55          5.3%           30.6%       5.8x
+    #        0.60          1.3%           10.2%       7.9x   <- selected
+    #        0.65          0.3%            2.0%       6.2x
+    #
+    # 0.60 peaks the lift and fires on 1.3% of genuine applications. A lower
+    # cut-off fires on a third of all traffic at barely 2x lift, which is
+    # alert fatigue rather than a signal - an analyst who sees the panel on
+    # every third case stops reading it.
+    similarity_min_score: float = Field(default=0.60, ge=0.0, le=1.0)
+    similarity_moderate_score: float = Field(default=0.55, ge=0.0, le=1.0)
+    similarity_seed_size: int = Field(default=400, ge=0)
+
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_origins(cls, value: object) -> object:

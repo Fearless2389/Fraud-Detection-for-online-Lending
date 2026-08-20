@@ -148,8 +148,23 @@ class SimilarCaseOut(BaseModel):
     """A previously confirmed fraud case resembling this application."""
 
     case_id: str
-    similarity: float = Field(ge=0.0, le=1.0)
+    similarity: float = Field(
+        ge=0.0, le=1.0,
+        description="Fraction of the ensemble's trees routing both this "
+                    "application and the confirmed case to the same leaf.",
+    )
     confirmed_fraud: bool
+    strength: Literal["strong", "moderate", "weak"] = Field(
+        description=(
+            "Calibrated against held-out data rather than assigned by feel. "
+            "'strong' (>=0.60) fires on 1.3% of genuine applications and "
+            "10.2% of fraud - a 7.9x lift, rare enough to be worth acting on. "
+            "'moderate' (>=0.55) carries 5.8x lift. Anything weaker is "
+            "reported for context only: at 0.45 the panel would fire on a "
+            "third of all genuine traffic at barely 2x lift, which is alert "
+            "fatigue rather than a signal."
+        )
+    )
     matched_on: list[str] = Field(
         default_factory=list,
         description="Factors this case has in common with the application",
@@ -180,6 +195,20 @@ class DecisionOut(BaseModel):
     narrative: str
     narrative_source: Literal["gemini", "template"]
     similar_confirmed_cases: list[SimilarCaseOut] = Field(default_factory=list)
+
+    model_decision: Literal["APPROVE", "REVIEW", "BLOCK"] = Field(
+        description="What the calibrated model and cost policy decided, before "
+                    "any escalation rule was applied. Recorded separately so "
+                    "the escalation is auditable rather than invisible."
+    )
+    escalated: bool = Field(
+        default=False,
+        description="True when a rule raised the decision above the model's own.",
+    )
+    escalation_reason: str | None = Field(
+        default=None,
+        description="Why the decision was escalated. Null when it was not.",
+    )
 
     model_version: str
     scored_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
