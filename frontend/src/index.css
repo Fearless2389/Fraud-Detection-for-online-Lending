@@ -1,0 +1,153 @@
+/* ==========================================================================
+   Aegis - fraud operations console
+   --------------------------------------------------------------------------
+   The visual language is a monitoring terminal, not a marketing dashboard.
+   Analysts work this screen for hours, so the design optimises for scanning
+   density and instant status recognition rather than for whitespace:
+
+   - near-black surfaces, so status colour is the only thing that glows
+   - hairline rules instead of card shadows: more rows visible per screen
+   - every number in a tabular monospace, so digits align down a column and
+     a changing figure does not reflow the row
+   - status colour never carries meaning alone; each decision also has a
+     label and a distinct glyph, for colour-vision safety and for print
+
+   Chart and status colours are the validated dark-mode steps: each clears
+   3:1 against the panel surface and remains distinguishable under deuteranopia
+   and tritanopia simulation.
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+@theme {
+  /* --- surfaces: a deliberately shallow ramp, so elevation reads as
+     structure rather than as decoration --- */
+  --color-surface-0: #0a0a0a;   /* page */
+  --color-surface-1: #101010;   /* panel */
+  --color-surface-2: #161616;   /* raised row, hover */
+  --color-surface-3: #1d1d1d;   /* selected row */
+
+  --color-line: #232323;        /* hairline divider */
+  --color-line-bright: #333333; /* active border */
+
+  /* --- ink --- */
+  --color-ink: #f4f2ec;
+  --color-ink-2: #a5a19a;
+  --color-ink-3: #6d6a64;
+
+  /* --- decision status: fixed, never reused as chart series --- */
+  --color-approve: #0ca30c;
+  --color-review: #fab219;
+  --color-block: #d03b3b;
+
+  /* --- chart series (validated dark steps) --- */
+  --color-series-1: #3987e5;
+  --color-series-2: #d95926;
+  --color-series-3: #199e70;
+  --color-series-4: #c98500;
+
+  --font-display: 'Archivo', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', 'Cascadia Mono', Consolas, monospace;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-surface-0);
+    color: var(--color-ink);
+    font-family: var(--font-display);
+    font-feature-settings: 'ss01', 'cv01';
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Digits align vertically in every table and ticker. Without this a value
+     changing from 1,199 to 1,200 visibly shifts the whole row. */
+  .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  ::selection {
+    background: var(--color-series-1);
+    color: #fff;
+  }
+
+  /* A terminal's scrollbars should recede, not chrome the panel. */
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: var(--color-surface-0); }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-line-bright);
+    border: 3px solid var(--color-surface-0);
+    border-radius: 6px;
+  }
+  ::-webkit-scrollbar-thumb:hover { background: #444; }
+}
+
+@layer components {
+  /* Section eyebrow: the small caps label above every panel. */
+  .eyebrow {
+    font-size: 0.625rem;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-ink-3);
+  }
+
+  .panel {
+    background-color: var(--color-surface-1);
+    border: 1px solid var(--color-line);
+  }
+
+  /* Status pill. The glyph is not decorative - it is the redundant channel
+     that lets the state survive greyscale printing and colour blindness. */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.125rem 0.5rem;
+    font-family: var(--font-mono);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    border: 1px solid currentColor;
+  }
+}
+
+/* --- motion -------------------------------------------------------------
+   One purpose only: showing that a row is newly arrived. A live feed where
+   rows appear instantly is hard to follow; a 300ms entry makes the eye track
+   the new item without slowing the operator down. */
+
+@keyframes row-enter {
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-live {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.25; }
+}
+
+@keyframes sweep {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%); }
+}
+
+.row-enter { animation: row-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1) both; }
+.live-dot  { animation: pulse-live 1.6s ease-in-out infinite; }
+.sweep::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(57, 135, 229, 0.12), transparent);
+  animation: sweep 1.4s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-enter, .live-dot, .sweep::after { animation: none; }
+}
