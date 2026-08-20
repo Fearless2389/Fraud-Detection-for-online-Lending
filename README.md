@@ -3,9 +3,12 @@
 Real-time fraud detection for digital lending origination, built for the Synchrony
 technology hackathon (Problem Statement 1).
 
-Aegis scores a loan application in **under 200ms**, explains every decision in reason
+Aegis scores a loan application in **under 100ms**, explains every decision in reason
 codes an analyst can act on and a regulator can audit, and derives its approve/review/block
 boundaries from business economics rather than a tuned constant.
+
+When an analyst confirms a fraud, the next application matching that pattern is escalated
+automatically — **with no retraining**.
 
 ![Fraud operations console](docs/figures/console.png)
 
@@ -38,8 +41,8 @@ system that actually detects fraud, not against a strawman.
 | **Calibration error (ECE)** | **0.135 → 0.0028** | **97.9% reduction** after isotonic calibration |
 | Brier score | 0.0724 → 0.0126 | |
 | Behavioural signal share | **41.3%** | of total model gain |
-| Decision latency | p50 115ms / **p95 163ms** | round-trip, 40 requests |
-| Tests | **69 passing** | |
+| Decision latency | p50 74ms / **p95 88ms** | server-side, 100 requests, 400-case index |
+| Tests | **69 passing** | plus 24 end-to-end smoke checks |
 
 **Accuracy is deliberately absent from this table.** At 1.1% fraud prevalence a model that
 predicts "never fraud" scores 98.9%. Any submission leading with accuracy on this dataset is
@@ -158,7 +161,35 @@ when the provider is down or out of quota.
 
 A supervised model only recognises fraud resembling its training labels. When an analyst
 confirms a new fraud, its signature is indexed **immediately** and every subsequent lookalike
-is flagged — with no retraining. One confirmed case becomes a detector.
+is escalated — with no retraining. One confirmed case becomes a detector.
+
+Verified end to end:
+
+```
+BEFORE  decision=APPROVE   model_decision=APPROVE   escalated=False
+        analyst confirms the fraud  →  index 400 → 401
+AFTER   decision=REVIEW    model_decision=APPROVE   escalated=True
+        reason: 100% match to confirmed fraud case APP-C7834D1D4D
+        p(fraud)=0.0144 — unchanged, because the model was never retrained
+```
+
+The escalation rule is deliberately narrow: it only ever **raises** a decision, never lowers
+one; it goes APPROVE → REVIEW and never straight to BLOCK; and it fires only on a match
+strength measured to carry 7.9× lift. At 8.9% precision, auto-blocking on a similarity match
+would decline roughly eleven genuine applicants per fraud stopped. The model's own decision
+is preserved in the response so the override is auditable rather than invisible.
+
+Match strength is calibrated, not assigned by feel — measured on 4,000 held-out applications
+against a 400-case index:
+
+| Threshold | Genuine firing | Fraud firing | Lift |
+| ---: | ---: | ---: | ---: |
+| 0.45 | 32.3% | 75.5% | 2.3× |
+| 0.55 (*moderate*) | 5.3% | 30.6% | 5.8× |
+| **0.60** (*strong*, acts) | **1.3%** | 10.2% | **7.9×** |
+
+Below 0.60 the panel is shown for context but takes no action. A cut-off at 0.45 would fire
+on a third of all genuine traffic — alert fatigue rather than a signal.
 
 Applications are compared by **the leaves they occupy in the gradient-boosted ensemble**, not
 by raw feature distance. Two applications routed to the same leaves were routed there by the
