@@ -16,21 +16,41 @@ import { Activity, Pause, Play, ShieldAlert } from 'lucide-react';
 import {
   api,
   ApiError,
+  type AuditEntry,
   type DriftAnalysis,
   type ModelMetrics,
   type PolicyState,
+  type StorageStatus,
 } from './lib/api';
 import { formatCount, formatPercent, formatProbability } from './lib/format';
+import { AuditTrail, PersistenceBadge } from './components/AuditTrail';
 import { CaseDetail } from './components/CaseDetail';
 import { DriftPanel } from './components/DriftPanel';
 import { LiveLedger, type LedgerRow } from './components/LiveLedger';
 import { PolicyDial } from './components/PolicyDial';
-import { Notice, Panel, Stat } from './components/primitives';
+import { Notice, Panel, Stat, TabbedPanel } from './components/primitives';
 
 /** Roughly one application per second: fast enough to feel live, slow enough to read. */
 const STREAM_INTERVAL_MS = 900;
 /** Bounded so a long-running demo cannot grow the DOM without limit. */
 const MAX_ROWS = 60;
+
+/**
+ * How often the audit panel re-reads Postgres while streaming.
+ *
+ * Not on every scored application: the writer batches every 500ms, so polling
+ * faster than that shows the same rows again and spends a database round trip
+ * to do it. Three seconds keeps the panel visibly live without turning a
+ * read-only view into load.
+ */
+const AUDIT_POLL_MS = 3_000;
+
+const RIGHT_TABS = [
+  { id: 'health', label: 'Model health' },
+  { id: 'audit', label: 'Audit trail' },
+] as const;
+
+type RightTab = (typeof RIGHT_TABS)[number]['id'];
 
 export default function App() {
   const [rows, setRows] = useState<LedgerRow[]>([]);
@@ -44,7 +64,26 @@ export default function App() {
   const [drift, setDrift] = useState<DriftAnalysis | null>(null);
   const [trueFraudRate, setTrueFraudRate] = useState<number | null>(null);
 
+  const [rightTab, setRightTab] = useState<RightTab>('health');
+  const [audit, setAudit] = useState<AuditEntry[]>([]);
+  const [storage, setStorage] = useState<StorageStatus | null>(null);
+
   const offset = useRef(0);
+
+  /* ---------------- persistence ----------------
+     Read together so the counters and the entries below them always describe
+     the same moment; fetched separately they can disagree by a batch, and a
+     panel whose header contradicts its own list reads as broken. */
+
+  const refreshAudit = useCallback(async () => {
+    try {
+      const [entries, status] = await Promise.all([api.audit(40), api.storage()]);
+      setAudit(entries.entries);
+      setStorage(status);
+    } catch {
+      /* Persistence is optional; the panel reports its own absence. */
+    }
+  }, []);
 
   /* ---------------- initial load ---------------- */
 
@@ -66,6 +105,11 @@ export default function App() {
         setPolicy(policyState);
         setMetrics(modelMetrics);
         setDrift(driftAnalysis);
+
+        // Persistence is optional, so its absence must not present as a broken
+        // console. Failures here leave the badge hidden and the panel saying
+        // plainly that nothing is being recorded.
+        void refreshAudit();
       } catch (caught) {
         setFatalError(
           caught instanceof ApiError && caught.status === 401
@@ -76,7 +120,19 @@ export default function App() {
         );
       }
     })();
-  }, []);
+  }, [refreshAudit]);
+
+  /* ---------------- audit polling ----------------
+     Only while the stream is running or the panel is open. Polling a database
+     for a view nobody is looking at is pure waste, and on a laptop driving a
+     recorded demo it is waste with a visible cost. */
+
+  useEffect(() => {
+    if (!streaming && rightTab !== 'audit') return;
+    void refreshAudit();
+    const handle = window.setInterval(() => void refreshAudit(), AUDIT_POLL_MS);
+    return () => window.clearInterval(handle);
+  }, [streaming, rightTab, refreshAudit]);
 
   /* ---------------- the live stream ---------------- */
 
@@ -151,6 +207,9 @@ export default function App() {
       // Confirming fraud grows the similarity index; reflect that immediately
       // so the header count visibly moves when an analyst acts.
       setPolicy(await api.policy());
+      // Show the analyst their own action in the audit trail without waiting
+      // for the next poll - the causal link is the point of the panel.
+      await refreshAudit();
     } catch {
       /* The feedback loop is best-effort in the console; the API logs failures. */
     } finally {
@@ -199,6 +258,7 @@ export default function App() {
               {policy.model_version} · index {policy.similarity_index_size}
             </span>
           )}
+          <PersistenceBadge storage={storage} />
           <div className="flex items-center gap-1.5">
             <span
               className={`h-1.5 w-1.5 rounded-full ${streaming ? 'live-dot' : ''}`}
@@ -293,12 +353,28 @@ export default function App() {
           <Panel label="Risk appetite">
             <PolicyDial policy={policy} />
           </Panel>
-          <Panel
-            label="Model health"
-            action={<Activity size={11} className="text-ink-3" aria-hidden="true" />}
+          <TabbedPanel
+            tabs={RIGHT_TABS}
+            active={rightTab}
+            onSelect={setRightTab}
+            action={
+              rightTab === 'health' ? (
+                <Activity size={11} className="text-ink-3" aria-hidden="true" />
+              ) : (
+                storage?.persistence && (
+                  <span className="num text-[9px] text-ink-3">
+                    {formatCount(storage.writer.written)} written
+                  </span>
+                )
+              )
+            }
           >
-            <DriftPanel analysis={drift} />
-          </Panel>
+            {rightTab === 'health' ? (
+              <DriftPanel analysis={drift} />
+            ) : (
+              <AuditTrail entries={audit} storage={storage} />
+            )}
+          </TabbedPanel>
         </div>
       </main>
     </div>

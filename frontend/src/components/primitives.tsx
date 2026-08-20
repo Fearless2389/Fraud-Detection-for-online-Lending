@@ -37,6 +37,64 @@ export function Panel({
 }
 
 /* -------------------------------------------------------------------------
+   Tabbed panel
+
+   Same frame as Panel, but the header carries selectable views instead of a
+   single label. Used where two related readings compete for one region of a
+   fixed-height layout and neither justifies its own column.
+
+   Implemented with the ARIA tab pattern rather than styled buttons: these are
+   genuinely tabs, and a keyboard user should be able to treat them as such.
+   ------------------------------------------------------------------------- */
+
+export function TabbedPanel<T extends string>({
+  tabs,
+  active,
+  onSelect,
+  action,
+  children,
+}: {
+  tabs: readonly { id: T; label: string }[];
+  active: T;
+  onSelect: (id: T) => void;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section className="panel flex min-h-0 flex-col">
+      <header className="flex shrink-0 items-center justify-between gap-2 border-b border-line pr-4">
+        <div role="tablist" aria-label="Panel view" className="flex">
+          {tabs.map((tab) => {
+            const selected = tab.id === active;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => onSelect(tab.id)}
+                // The active tab is marked by a top rule and brighter ink, not
+                // by a filled background: a solid block would out-weigh the
+                // panel's own content in a dense layout.
+                className={`eyebrow border-t-2 px-4 py-2.5 transition-colors ${
+                  selected
+                    ? 'border-t-[color:var(--color-series-1)] text-ink'
+                    : 'border-t-transparent text-ink-3 hover:text-ink-2'
+                }`}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+        {action}
+      </header>
+      <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+    </section>
+  );
+}
+
+/* -------------------------------------------------------------------------
    Decision pill
 
    Colour plus glyph plus text. The redundancy is intentional: roughly 1 in 12

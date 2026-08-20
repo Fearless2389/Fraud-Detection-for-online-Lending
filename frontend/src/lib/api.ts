@@ -123,6 +123,30 @@ export interface DriftAnalysis {
   drift_by_month: DriftMonth[];
 }
 
+/** One entry in the append-only audit log. */
+export interface AuditEntry {
+  id: number;
+  event: string;
+  application_id: string | null;
+  /** 'system' for automated decisions, an analyst id for human verdicts. */
+  actor: string;
+  detail: Record<string, unknown>;
+  occurred_at: string;
+}
+
+export interface AuditResponse {
+  persistence: boolean;
+  entries: AuditEntry[];
+}
+
+export interface StorageStatus {
+  /** False when the service is running with no database behind it. */
+  persistence: boolean;
+  tables: Record<string, number>;
+  writer: { queued: number; written: number; dropped: number };
+  similarity_index: { size: number; durable: boolean };
+}
+
 export class ApiError extends Error {
   // Declared explicitly rather than as a constructor parameter property:
   // this project builds with `erasableSyntaxOnly`, which rejects TypeScript
@@ -202,6 +226,12 @@ export const api = {
   modelMetrics: () => request<ModelMetrics>('/api/v1/metrics/model'),
 
   drift: () => request<DriftAnalysis>('/api/v1/metrics/drift'),
+
+  /** The tail of the append-only audit log. Empty when no database is configured. */
+  audit: (limit = 40) => request<AuditResponse>(`/api/v1/audit/recent?limit=${limit}`),
+
+  /** Row counts and writer health, for the persistence indicator. */
+  storage: () => request<StorageStatus>('/api/v1/storage'),
 
   recordDecision: (
     applicationId: string,
