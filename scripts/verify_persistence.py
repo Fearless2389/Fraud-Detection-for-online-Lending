@@ -114,8 +114,20 @@ def main() -> int:
     # -- 1. scoring writes through, off the decision path -----------------
     heading("1. scoring writes through to Postgres, off the decision path")
 
-    batch = client.get("/api/v1/stream/applications", params={"count": 6}).json()
-    applications = [item["application"] for item in batch["applications"]]
+    batch = client.get("/api/v1/stream/applications", params={"count": 10}).json()
+    streamed = batch["applications"]
+    applications = [item["application"] for item in streamed]
+
+    # Confirm a case that genuinely IS fraud.
+    #
+    # This script writes to a durable index that the running demo reads from,
+    # and a "confirmed fraud" is permanent. Confirming whichever application
+    # happened to arrive first would teach the index that a genuine applicant's
+    # profile is fraudulent, and every later lookalike would be escalated for
+    # nothing. The replay feed carries the true label precisely so a test can
+    # avoid poisoning the thing it is testing.
+    fraud_positions = [i for i, item in enumerate(streamed) if item["actual_fraud"]]
+    confirm_position = fraud_positions[0] if fraud_positions else 0
 
     latencies, scored_ids = [], []
     for application in applications:
@@ -182,8 +194,13 @@ def main() -> int:
     # -- 3. an analyst's confirmation is durable and acts ----------------
     heading("3. a confirmed fraud is stored durably and changes the next decision")
 
-    target = applications[0]
-    confirm_id = scored_ids[0]
+    target = applications[confirm_position]
+    confirm_id = scored_ids[confirm_position]
+    if not fraud_positions:
+        print("        NOTE: no fraudulent application in this batch; confirming a "
+              "genuine one, which will need cleaning up afterwards")
+    else:
+        print(f"        confirming {confirm_id}, whose true label is fraud")
 
     response = client.post(
         f"/api/v1/applications/{confirm_id}/decision",
