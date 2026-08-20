@@ -1,0 +1,36 @@
+# Aegis backend dependencies
+# Target interpreter: Python 3.13 (NOT 3.14 - SHAP/LightGBM wheel availability lags)
+# Versions are lower-bounded rather than pinned; a resolved lock is generated
+# into requirements.lock.txt after the first successful install.
+
+# --- API layer ---
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.9
+pydantic-settings>=2.6
+python-dotenv>=1.0
+slowapi>=0.1.9              # rate limiting on scoring endpoints
+
+# --- data / modelling ---
+numpy>=2.0
+pandas>=2.2
+pyarrow>=17.0               # parquet cache of the BAF csv (much faster reloads)
+scikit-learn>=1.5
+lightgbm>=4.5               # supervised tier
+shap>=0.46                  # per-decision attributions -> reason codes
+joblib>=1.4                 # model artifact serialisation
+matplotlib>=3.9             # offline metric plots for the deck
+
+# --- persistence ---
+sqlalchemy>=2.0
+psycopg[binary]>=3.2        # Supabase / Postgres driver
+pgvector>=0.3               # vector column type + similarity ops
+
+# --- AI layer ---
+google-genai>=0.8           # Gemini: explanation narration only, never decisioning
+
+# --- tooling ---
+kaggle>=1.6                 # dataset download
+httpx>=0.27
+pytest>=8.3
+pytest-asyncio>=0.24

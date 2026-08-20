@@ -1,0 +1,46 @@
+# --- secrets: nothing in this family is ever committed ---
+.env
+.env.local
+.env.*.local
+*.pem
+kaggle.json
+**/serviceAccount*.json
+
+# --- data: BAF is CC BY-NC-ND, and large. Ship the loader, never the CSVs. ---
+backend/ml/data/raw/
+backend/ml/data/interim/
+backend/ml/data/processed/
+*.csv
+*.parquet
+
+# --- model artifacts: reproducible from training scripts ---
+backend/ml/artifacts/*.pkl
+backend/ml/artifacts/*.joblib
+backend/ml/artifacts/*.txt
+backend/ml/artifacts/*.json
+!backend/ml/artifacts/.gitkeep
+
+# --- python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+*.egg-info/
+
+# --- node / frontend ---
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# --- os / editor ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
