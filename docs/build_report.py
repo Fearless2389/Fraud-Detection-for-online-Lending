@@ -203,7 +203,7 @@ th {
   text-align: left; padding: 0 3mm 1.6mm 0;
   border-bottom: 1px solid var(--ink);
 }
-td { padding: 1.7mm 3mm 1.7mm 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+td { padding: 1.5mm 3mm 1.5mm 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
 /* Right-aligned cells keep their gutter unless they are the last column, where
    the page margin already provides one. Without the :last-child qualifier a
    right-aligned middle column butts straight into the text beside it. */
@@ -1112,7 +1112,7 @@ after  restart   fraud_vectors 401   index 401   decisions 562
       </tr>
       <tr>
         <td><strong>Account opening ≠ lending origination</strong></td>
-        <td>The dataset's fields are unambiguously credit-product ones — proposed credit limit, payment plan type, other cards held — so the domain match is close. It contains no post-origination behaviour, so first-party bust-out fraud is out of scope entirely.</td>
+        <td>The fields are unambiguously credit-product ones — proposed credit limit, payment plan type, other cards held — so the domain match is close. There is no post-origination behaviour, so first-party bust-out fraud is out of scope.</td>
       </tr>
       <tr>
         <td><strong>No adaptation strategy beat inaction</strong></td>
@@ -1124,7 +1124,7 @@ after  restart   fraud_vectors 401   index 401   decisions 562
       </tr>
       <tr>
         <td><strong>The audit write is asynchronous</strong></td>
-        <td>A process killed between enqueue and flush loses at most one half-second batch. Correct against a database across the internet; wrong against a co-located one, where the write belongs in the request's transaction.</td>
+        <td>A process killed between enqueue and flush loses at most one half-second batch. Correct against a database across the internet; wrong against a co-located one.</td>
       </tr>
       <tr>
         <td><strong>No cloud deployment</strong></td>
@@ -1157,8 +1157,8 @@ after  restart   fraud_vectors 401   index 401   decisions 562
 
   <div class="footer-note">
     Dataset: Bank Account Fraud Suite (NeurIPS 2022), Feedzai, CC BY-NC-ND 4.0.
-    Not redistributed with this project. Figures and tables in this report are
-    generated directly from the training and analysis artifacts.
+    Not redistributed here. Every figure and table is generated directly from
+    the training and analysis artifacts.
   </div>
 </section>
 
