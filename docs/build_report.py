@@ -146,7 +146,7 @@ code {
 
 /* ---------- cover ---------- */
 
-.cover { height: 248mm; display: flex; flex-direction: column; }
+.cover { height: 240mm; display: flex; flex-direction: column; }
 .cover-top { flex: 1; display: flex; flex-direction: column; }
 .cover h1 {
   font-size: 46pt; font-weight: 600; letter-spacing: -0.035em;
@@ -181,7 +181,7 @@ code {
    metadata block. Cropped to its plot area: the figure's own title would
    repeat the claim stated two inches above it. */
 .cover-figure {
-  flex: 1; margin: 6mm 0 0; min-height: 0; max-height: 104mm;
+  flex: 1; margin: 6mm 0 0; min-height: 0; max-height: 96mm;
   display: flex; align-items: center; justify-content: center;
   border-top: 1px solid var(--rule);
 }
@@ -398,6 +398,7 @@ def build_html() -> str:
       <tr><td class="dim">Model</td><td>LightGBM, {metrics['best_iteration']} boosting iterations, {metrics['n_features']} features, isotonic calibration</td></tr>
       <tr><td class="dim">Evaluation</td><td>Temporal hold-out — months 6–7, never seen in training or calibration</td></tr>
       <tr><td class="dim">Stack</td><td>FastAPI · React 19 · PostgreSQL 17 + pgvector · SHAP · Gemini</td></tr>
+      <tr><td class="dim">Source</td><td class="mono">github.com/Fearless2389/Fraud-Detection-for-online-Lending</td></tr>
     </table>
   </div>
 </section>

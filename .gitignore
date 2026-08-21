@@ -43,7 +43,13 @@ dist-ssr/
 # are committed; the HTML is a by-product with megabytes of inlined base64
 # images and no reason to be in a diff.
 docs/report.html
-docs/console_guide.html
+
+# --- rehearsal material: kept on disk, never published ---
+# prep/ holds the console walkthrough and demo run-sheet. They are working
+# notes for whoever is presenting - what to point at, what to say, how to
+# answer a challenge - and they are nobody else's business. The report in
+# docs/ is the document intended for readers.
+prep/
 
 # --- os / editor ---
 .DS_Store
