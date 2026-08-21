@@ -25,6 +25,14 @@ from pathlib import Path
 DOCS = Path(__file__).resolve().parent
 PROJECT_ROOT = DOCS.parent
 ARTIFACTS = PROJECT_ROOT / "backend" / "ml" / "artifacts"
+
+# Import the model's own definition of a behavioural feature rather than
+# restating it. The report quotes a headline "behavioural share of gain"; if
+# this document disagreed with the pipeline about which features count, the
+# table and the headline would contradict each other and only a careful reader
+# would notice.
+sys.path.insert(0, str(PROJECT_ROOT / "backend"))
+from ml.features.pipeline import BEHAVIOURAL_FEATURES  # noqa: E402
 FIGURES = DOCS / "figures"
 OUTPUT_PDF = DOCS / "Aegis-Technical-Report.pdf"
 OUTPUT_HTML = DOCS / "report.html"
@@ -309,23 +317,27 @@ def build_html() -> str:
             </tr>""")
         return "".join(rows)
 
-    def top_feature_rows(limit: int = 8) -> str:
-        behavioural_names = {
-            "velocity_4w", "velocity_24h", "velocity_6h", "session_length_in_minutes",
-            "device_distinct_emails_8w", "zip_count_4w", "keep_alive_session",
-            "date_of_birth_distinct_emails_4w", "bank_branch_count_8w", "device_os",
-            "days_since_request",
-        }
+    def top_feature_rows(limit: int = 8) -> tuple[str, float]:
+        """Rows for the top-N table, plus the behavioural share they cover.
+
+        The behavioural set is imported from the feature pipeline rather than
+        restated here. Two definitions of "behavioural" - one in the model, one
+        in the document describing it - is how a report ends up contradicting
+        its own headline figure.
+        """
         rows = []
+        shown_behavioural = 0.0
         for feature in metrics["top_features"][:limit]:
-            is_behavioural = feature["feature"] in behavioural_names
+            is_behavioural = feature["feature"] in BEHAVIOURAL_FEATURES
+            if is_behavioural:
+                shown_behavioural += feature["share"]
             rows.append(f"""
             <tr>
               <td class="n">{feature['feature']}</td>
               <td>{'behavioural' if is_behavioural else 'application'}</td>
               <td class="r n">{pct(feature['share'])}</td>
             </tr>""")
-        return "".join(rows)
+        return "".join(rows), shown_behavioural
 
     def queue_rows() -> str:
         rows = []
@@ -340,6 +352,8 @@ def build_html() -> str:
               <td class="r n dim">{pct(entry['fixed_recall'])} / {pct(entry['budget_recall'])}</td>
             </tr>""")
         return "".join(rows)
+
+    feature_rows, shown_behavioural = top_feature_rows()
 
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
@@ -533,7 +547,7 @@ def build_html() -> str:
       This buys {num(fp_avoided)} customers at the price of
       {num(three['reviewed'])} manual reviews — about
       {pct(three['reviewed'] / splits['test']['rows'])} of traffic. That is only
-      a good trade if the analysts exist. Section 6 shows what happens to the
+      a good trade if the analysts exist. Section 7 shows what happens to the
       queue when they do not, and it is the weakest point in the design.
     </p>
   </div>
@@ -612,9 +626,8 @@ def build_html() -> str:
     <caption>
       The 0.5 cut-off blocks almost nobody and therefore looks precise — while
       missing {pct(naive['fraud_missed'] / splits['test']['fraud'], 0)} of all
-      fraud. It is cheaper on false positives and
-      {(naive['total_cost'] / derived['total_cost'] - 1) * 100:.0f}% more
-      expensive overall.
+      fraud. It is cheaper on false positives and costs
+      {naive['total_cost'] / derived['total_cost']:.1f}× as much overall.
     </caption>
   </table>
 </section>
@@ -651,7 +664,7 @@ def build_html() -> str:
         <td>ROC-AUC <span class="dim">(ranking — should not move)</span></td>
         <td class="r n">{raw['roc_auc']:.4f}</td>
         <td class="r n">{cal['roc_auc']:.4f}</td>
-        <td class="r n dim">{cal['roc_auc'] - raw['roc_auc']:+.4f}</td>
+        <td class="r n dim">{f"{cal['roc_auc'] - raw['roc_auc']:+.4f}".replace('-', '−')}</td>
       </tr>
       <tr>
         <td>Recall at a 5% alert budget</td>
@@ -705,10 +718,15 @@ def build_html() -> str:
     <thead>
       <tr><th>Feature</th><th>Type</th><th class="r">Share of gain</th></tr>
     </thead>
-    <tbody>{top_feature_rows()}</tbody>
+    <tbody>{feature_rows}</tbody>
     <caption>
-      Top features by total split gain. Behavioural and device signals together
-      account for {pct(behavioural)} of the model's total gain.
+      Top eight features by total split gain, out of {metrics['n_features']}.
+      The behavioural ones visible here account for {pct(shown_behavioural)} of
+      total gain; the other {pct(behavioural - shown_behavioural)} sits in the
+      tail — velocity windows, postcode counts, device-email counts — which is
+      why the model's behavioural share is {pct(behavioural)} and not the sum of
+      this column. Classification follows the model's own feature groups, not a
+      list restated for this document.
     </caption>
   </table>
 
@@ -718,7 +736,7 @@ def build_html() -> str:
       Housing status dominates, which is worth stating plainly rather than
       hiding: it is a proxy for stability, and a model leaning this hard on one
       categorical field is a model whose fairness properties need checking —
-      see Section 9.
+      see Section 11.
     </figcaption>
   </figure>
 </section>
@@ -893,8 +911,10 @@ def build_html() -> str:
     gradient-boosted ensemble</strong>, and two applications are similar in
     proportion to how many trees route them to the same leaf. This uses the
     model's own learned notion of resemblance — including feature interactions —
-    rather than a distance metric imposed on top of it, and it is directly
-    interpretable: <em>these two agree in 82% of the model's decision paths</em>.
+    rather than a distance metric imposed on top of it. It is also directly
+    interpretable, because the score has a plain reading: a similarity of 0.82
+    means <em>these two applications are routed to the same leaf by 82% of the
+    trees in the model</em>.
   </p>
 
   <h3>The threshold was measured, not chosen</h3>
@@ -922,17 +942,19 @@ def build_html() -> str:
     A match alone does not decide anything. The rule only ever <em>raises</em> a
     decision, never lowers one; it moves APPROVE to REVIEW and never straight to
     BLOCK; and it fires only on a match strength measured to carry 7.9× lift. At
-    8.9% precision, auto-blocking on similarity would decline roughly eleven
+    8.9% precision, auto-blocking on similarity would decline roughly ten
     genuine applicants for every fraud stopped. The model's own decision is
     preserved in the response so an auditor can always see what was decided and
     what changed it.
   </p>
 
   <pre class="block">BEFORE   decision=APPROVE   model_decision=APPROVE   escalated=False
+         p(fraud)=0.0259  - a fraudulent application the model lets through
          an analyst confirms the fraud  ->  index 400 -> 401
 AFTER    decision=REVIEW    model_decision=APPROVE   escalated=True
-         reason: 100% match to confirmed fraud case APP-C7834D1D4D
-         p(fraud)=0.0144 — unchanged, because the model was never retrained</pre>
+         reason: 100% match to confirmed fraud case APP-F482729F9C
+                 (shares device_os, employment_status, housing_status)
+         p(fraud)=0.0259  - unchanged, because the model was never retrained</pre>
 
   <p>
     The confirmed case is written to PostgreSQL before it enters the in-process
