@@ -38,11 +38,12 @@ dist-ssr/
 .vite/
 *.local
 
-# --- report build intermediate ---
-# docs/build_report.py renders this, then Chromium turns it into the PDF.
-# The PDF is committed; the HTML is a by-product with a megabyte of inlined
-# base64 images and no reason to be in a diff.
+# --- report build intermediates ---
+# The build scripts render these, then Chromium turns them into PDFs. The PDFs
+# are committed; the HTML is a by-product with megabytes of inlined base64
+# images and no reason to be in a diff.
 docs/report.html
+docs/console_guide.html
 
 # --- os / editor ---
 .DS_Store
